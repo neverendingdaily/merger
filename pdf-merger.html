@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HighRes PDF Merger</title>
+
+  <!-- pdf-lib: クライアントサイドPDF操作ライブラリ -->
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ─── CSS Variables ─────────────────────────────────────────── */
+    :root {
+      --bg:        #0c0c0c;
+      --surface:   #161616;
+      --surface2:  #1e1e1e;
+      --border:    #2a2a2a;
+      --border2:   #383838;
+      --text:      #f0ede8;
+      --text-muted:#888880;
+      --accent:    #f0a400;
+      --accent-dim:#b37a00;
+      --danger:    #e05a2b;
+      --success:   #4caf7d;
+      --radius:    12px;
+      --radius-sm: 8px;
+      --shadow:    0 8px 32px rgba(0,0,0,.6);
+    }
+
+    /* ─── Reset / Base ──────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px 60px;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* ambient glow */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 60% 40% at 20% 10%, rgba(240,164,0,.07) 0%, transparent 70%),
+        radial-gradient(ellipse 50% 40% at 80% 90%, rgba(224,90,43,.05) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ─── Layout ────────────────────────────────────────────────── */
+    .wrapper {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 680px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* ─── Header ────────────────────────────────────────────────── */
+    header {
+      text-align: center;
+      padding-top: 16px;
+    }
+    .logo-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: linear-gradient(135deg, var(--accent) 0%, #c87e00 100%);
+      color: #000;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      padding: 5px 12px;
+      border-radius: 100px;
+      margin-bottom: 18px;
+    }
+    h1 {
+      font-size: clamp(2rem, 6vw, 3rem);
+      font-weight: 800;
+      letter-spacing: -.03em;
+      line-height: 1.1;
+    }
+    h1 span { color: var(--accent); }
+    .subtitle {
+      margin-top: 10px;
+      color: var(--text-muted);
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    /* ─── Drop Zone ─────────────────────────────────────────────── */
+    .drop-zone {
+      border: 2px dashed var(--border2);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s, transform .15s;
+      position: relative;
+    }
+    .drop-zone:hover,
+    .drop-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(240,164,0,.05);
+      transform: scale(1.01);
+    }
+    .drop-zone.disabled {
+      opacity: .45;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .drop-icon {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 16px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(240,164,0,.15), rgba(224,90,43,.1));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+    }
+    .drop-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .drop-sub {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* hidden file input */
+    #fileInput { display: none; }
+
+    /* ─── File Counter Badge ────────────────────────────────────── */
+    .counter-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 2px;
+    }
+    .counter-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+      letter-spacing: .06em;
+    }
+    .counter-pips {
+      display: flex;
+      gap: 6px;
+    }
+    .pip {
+      width: 28px;
+      height: 6px;
+      border-radius: 3px;
+      background: var(--border2);
+      transition: background .3s;
+    }
+    .pip.filled { background: var(--accent); }
+    .pip.full   { background: var(--danger); }
+
+    /* ─── File List ─────────────────────────────────────────────── */
+    .file-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .file-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 14px;
+      cursor: grab;
+      transition: border-color .2s, background .2s, box-shadow .2s, transform .15s;
+      position: relative;
+      animation: slideIn .25s ease forwards;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .file-card:hover {
+      border-color: var(--border2);
+      background: var(--surface2);
+      box-shadow: var(--shadow);
+    }
+    .file-card.dragging {
+      opacity: .4;
+      border-color: var(--accent);
+    }
+    .file-card.drag-target {
+      border-color: var(--accent);
+      background: rgba(240,164,0,.07);
+      transform: scale(1.02);
+    }
+
+    /* thumb */
+    .thumb {
+      flex-shrink: 0;
+      width: 52px;
+      height: 64px;
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .thumb-pdf {
+      font-size: 26px;
+      user-select: none;
+    }
+
+    /* info */
+    .file-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .file-name {
+      font-weight: 600;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .file-meta {
+      margin-top: 4px;
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .type-badge {
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .type-pdf  { background: rgba(100,149,237,.18); color: #6495ed; }
+    .type-jpg  { background: rgba(76,175,125,.18);  color: #4caf7d; }
+    .type-png  { background: rgba(186,104,200,.18); color: #ba68c8; }
+
+    /* drag handle */
+    .drag-handle {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 4px;
+      opacity: .35;
+      transition: opacity .2s;
+      cursor: grab;
+    }
+    .file-card:hover .drag-handle { opacity: .8; }
+    .drag-handle span {
+      display: block;
+      width: 16px;
+      height: 2px;
+      background: var(--text);
+      border-radius: 2px;
+    }
+
+    /* remove button */
+    .remove-btn {
+      flex-shrink: 0;
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--border2);
+      border-radius: 50%;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color .2s, color .2s, background .2s;
+    }
+    .remove-btn:hover {
+      border-color: var(--danger);
+      color: var(--danger);
+      background: rgba(224,90,43,.1);
+    }
+
+    /* order number */
+    .order-num {
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--border2);
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ─── Actions ───────────────────────────────────────────────── */
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .btn-merge {
+      width: 100%;
+      padding: 18px 24px;
+      border-radius: var(--radius);
+      border: none;
+      cursor: pointer;
+      font-family: 'Syne', sans-serif;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      background: linear-gradient(135deg, var(--accent) 0%, #d08000 100%);
+      color: #000;
+      box-shadow: 0 4px 24px rgba(240,164,0,.3);
+      transition: filter .2s, transform .15s, box-shadow .2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+    .btn-merge:hover:not(:disabled) {
+      filter: brightness(1.1);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px rgba(240,164,0,.4);
+    }
+    .btn-merge:active:not(:disabled) { transform: translateY(0); }
+    .btn-merge:disabled {
+      opacity: .35;
+      cursor: not-allowed;
+    }
+
+    .btn-clear {
+      width: 100%;
+      padding: 12px 24px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border2);
+      cursor: pointer;
+      font-family: 'Syne', sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      background: transparent;
+      color: var(--text-muted);
+      transition: border-color .2s, color .2s, background .2s;
+    }
+    .btn-clear:hover {
+      border-color: var(--danger);
+      color: var(--danger);
+      background: rgba(224,90,43,.06);
+    }
+
+    /* ─── Progress / Status ─────────────────────────────────────── */
+    .status-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      display: none;
+    }
+    .status-box.visible { display: block; }
+
+    .progress-bar-wrap {
+      height: 4px;
+      background: var(--border2);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), #e08000);
+      border-radius: 2px;
+      transition: width .3s ease;
+    }
+    .status-text {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .status-text.success { color: var(--success); }
+    .status-text.error   { color: var(--danger); }
+
+    /* ─── Toast ─────────────────────────────────────────────────── */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: var(--surface2);
+      border: 1px solid var(--danger);
+      border-radius: var(--radius-sm);
+      padding: 12px 20px;
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+      color: var(--danger);
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transition: opacity .25s, transform .25s;
+      pointer-events: none;
+      z-index: 999;
+      max-width: 90vw;
+      text-align: center;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* ─── Footer ────────────────────────────────────────────────── */
+    footer {
+      margin-top: 8px;
+      text-align: center;
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--border2);
+      letter-spacing: .06em;
+    }
+    footer span { color: var(--border2); }
+
+    /* ─── Info Box ──────────────────────────────────────────────── */
+    .info-box {
+      background: rgba(240,164,0,.05);
+      border: 1px solid rgba(240,164,0,.15);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .info-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+    .info-text {
+      font-family: 'DM Mono', monospace;
+      font-size: 11.5px;
+      color: var(--text-muted);
+      line-height: 1.7;
+    }
+    .info-text strong { color: var(--accent); }
+
+    /* ─── Responsive ────────────────────────────────────────────── */
+    @media (max-width: 480px) {
+      body { padding: 16px 12px 48px; }
+      .drop-zone { padding: 36px 16px; }
+      .file-card { padding: 10px 12px; gap: 10px; }
+      .thumb { width: 44px; height: 54px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="wrapper">
+
+    <!-- Header -->
+    <header>
+      <div class="logo-badge">⚡ High Resolution</div>
+      <h1>PDF <span>Merger</span></h1>
+      <p class="subtitle">
+        PDF / JPG / PNG を高画質のまま1ファイルに結合。<br />
+        ファイルはすべてブラウザ内で処理され、サーバーには送信されません。
+      </p>
+    </header>
+
+    <!-- Info Box -->
+    <div class="info-box">
+      <span class="info-icon">📌</span>
+      <div class="info-text">
+        <strong>画質維持のため、最大3ファイルまで</strong>対応。雑誌スクリーンショット等の細かい文字も、元解像度のまま結合します。
+        画像はPDF内に<strong>無劣化で埋め込まれ</strong>、ページサイズも自動調整されます。
+      </div>
+    </div>
+
+    <!-- Drop Zone -->
+    <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="ファイルをドロップまたはクリックして選択">
+      <div class="drop-icon">📂</div>
+      <div class="drop-title">ここにファイルをドロップ</div>
+      <div class="drop-sub">
+        または クリック / タップ して選択<br />
+        対応形式：PDF・JPG・PNG　最大 3 ファイルまで
+      </div>
+    </div>
+    <input type="file" id="fileInput" multiple accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" />
+
+    <!-- Counter -->
+    <div class="counter-row" id="counterRow" style="display:none;">
+      <span class="counter-label">FILES LOADED</span>
+      <div class="counter-pips">
+        <div class="pip" id="pip1"></div>
+        <div class="pip" id="pip2"></div>
+        <div class="pip" id="pip3"></div>
+      </div>
+    </div>
+
+    <!-- File List -->
+    <div class="file-list" id="fileList"></div>
+
+    <!-- Actions -->
+    <div class="actions" id="actionArea" style="display:none;">
+      <button class="btn-merge" id="mergeBtn" disabled>
+        <span>🔗</span> PDF を結合してダウンロード
+      </button>
+      <button class="btn-clear" id="clearBtn">すべてクリア</button>
+    </div>
+
+    <!-- Status -->
+    <div class="status-box" id="statusBox">
+      <div class="progress-bar-wrap">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+      <div class="status-text" id="statusText">処理中...</div>
+    </div>
+
+    <footer>HighRes PDF Merger — runs entirely in your browser &nbsp;🔒&nbsp; zero upload</footer>
+
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+  // ─────────────────────────────────────────────────────────────────────
+  //  State
+  // ─────────────────────────────────────────────────────────────────────
+  const MAX_FILES = 3;
+  let files = [];          // Array of { id, file, type, objectUrl, name, sizeStr }
+  let dragSrcIndex = null;
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  DOM refs
+  // ─────────────────────────────────────────────────────────────────────
+  const dropZone    = document.getElementById('dropZone');
+  const fileInput   = document.getElementById('fileInput');
+  const fileList    = document.getElementById('fileList');
+  const actionArea  = document.getElementById('actionArea');
+  const mergeBtn    = document.getElementById('mergeBtn');
+  const clearBtn    = document.getElementById('clearBtn');
+  const statusBox   = document.getElementById('statusBox');
+  const progressBar = document.getElementById('progressBar');
+  const statusText  = document.getElementById('statusText');
+  const counterRow  = document.getElementById('counterRow');
+  const toastEl     = document.getElementById('toast');
+  const pip1 = document.getElementById('pip1');
+  const pip2 = document.getElementById('pip2');
+  const pip3 = document.getElementById('pip3');
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  Toast
+  // ─────────────────────────────────────────────────────────────────────
+  let toastTimer;
+  function showToast(msg) {
+    clearTimeout(toastTimer);
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3800);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  Helpers
+  // ─────────────────────────────────────────────────────────────────────
+  function formatBytes(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+    return (b / 1048576).toFixed(1) + ' MB';
+  }
+
+  function getFileType(file) {
+    const name = file.name.toLowerCase();
+    if (file.type === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
+    if (file.type === 'image/jpeg' || name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'jpg';
+    if (file.type === 'image/png'  || name.endsWith('.png'))  return 'png';
+    return null;
+  }
+
+  function genId() {
+    return '_' + Math.random().toString(36).slice(2, 9);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  Add Files
+  // ─────────────────────────────────────────────────────────────────────
+  function addFiles(fileArr) {
+    const incoming = Array.from(fileArr);
+
+    // Filter valid types first
+    const valid = incoming.filter(f => {
+      const t = getFileType(f);
+      if (!t) {
+        showToast(`"${f.name}" は対応していない形式です。PDF / JPG / PNG のみ可能です。`);
+        return false;
+      }
+      return true;
+    });
+
+    if (valid.length === 0) return;
+
+    const available = MAX_FILES - files.length;
+    if (available <= 0) {
+      showToast('⚠️ 高画質を維持するため、一度に結合できるのは 3 枚までです。');
+      return;
+    }
+
+    if (valid.length > available) {
+      showToast(`⚠️ 高画質を維持するため、一度に結合できるのは 3 枚までです。最初の ${available} ファイルのみ追加しました。`);
+    }
+
+    const toAdd = valid.slice(0, available);
+
+    for (const f of toAdd) {
+      const type = getFileType(f);
+      const objectUrl = (type === 'jpg' || type === 'png') ? URL.createObjectURL(f) : null;
+      files.push({ id: genId(), file: f, type, objectUrl, name: f.name, sizeStr: formatBytes(f.size) });
+    }
+
+    renderList();
+    updateUI();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  Remove File
+  // ─────────────────────────────────────────────────────────────────────
+  function removeFile(id) {
+    const idx = files.findIndex(f => f.id === id);
+    if (idx === -1) return;
+    if (files[idx].objectUrl) URL.revokeObjectURL(files[idx].objectUrl);
+    files.splice(idx, 1);
+    renderList();
+    updateUI();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  Render File List
+  // ─────────────────────────────────────────────────────────────────────
+  function renderList() {
+    fileList.innerHTML = '';
+
+    files.forEach((item, idx) => {
+      const card = document.createElement('div');
+      card.className = 'file-card';
+      card.dataset.id = item.id;
+      card.draggable = true;
+
+      // Thumbnail
+      const thumb = document.createElement('div');
+      thumb.className = 'thumb';
+      if (item.type === 'jpg' || item.type === 'png') {
+        const img = document.createElement('img');
+        img.src = item.objectUrl;
+        img.alt = item.name;
+        thumb.appendChild(img);
+      } else {
+        const ic = document.createElement('div');
+        ic.className = 'thumb-pdf';
+        ic.textContent = '📄';
+        thumb.appendChild(ic);
+      }
+
+      // Order number
+      const num = document.createElement('div');
+      num.className = 'order-num';
+      num.textContent = idx + 1;
+
+      // Info
+      const info = document.createElement('div');
+      info.className = 'file-info';
+      const badge = `<span class="type-badge type-${item.type}">${item.type.toUpperCase()}</span>`;
+      info.innerHTML = `
+        <div class="file-name" title="${escHtml(item.name)}">${escHtml(item.name)}</div>
+        <div class="file-meta">${badge}<span>${item.sizeStr}</span></div>
+      `;
+
+      // Drag handle
+      const handle = document.createElement('div');
+      handle.className = 'drag-handle';
+      handle.innerHTML = '<span></span><span></span><span></span>';
+      handle.setAttribute('aria-label', '並び替え');
+
+      // Remove
+      const rem = document.createElement('button');
+      rem.className = 'remove-btn';
+      rem.innerHTML = '×';
+      rem.setAttribute('aria-label', `${item.name} を削除`);
+      rem.addEventListener('click', e => { e.stopPropagation(); removeFile(item.id); });
+
+      card.append(thumb, num, info, handle, rem);
+
+      // ── Drag & Drop reorder ──
+      card.addEventListener('dragstart', e => {
+        dragSrcIndex = idx;
+        e.dataTransfer.effectAllowed = 'move';
+        setTimeout(() => card.classList.add('dragging'), 0);
+      });
+      card.addEventListener('dragend', () => {
+        card.classList.remove('dragging');
+        document.querySelectorAll('.file-card').forEach(c => c.classList.remove('drag-target'));
+      });
+      card.addEventListener('dragover', e => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        document.querySelectorAll('.file-card').forEach(c => c.classList.remove('drag-target'));
+        if (dragSrcIndex !== idx) card.classList.add('drag-target');
+      });
+      card.addEventListener('dragleave', () => card.classList.remove('drag-target'));
+      card.addEventListener('drop', e => {
+        e.preventDefault();
+        card.classList.remove('drag-target');
+        if (dragSrcIndex === null || dragSrcIndex === idx) return;
+        const moved = files.splice(dragSrcIndex, 1)[0];
+        files.splice(idx, 0, moved);
+        dragSrcIndex = null;
+        renderList();
+      });
+
+      // Touch-based reorder (long-press swap)
+      setupTouchReorder(card, idx);
+
+      fileList.appendChild(card);
+    });
+  }
+
+  function escHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  Touch reorder (simple tap-to-swap on mobile)
+  // ─────────────────────────────────────────────────────────────────────
+  let touchSelectIdx = null;
+
+  function setupTouchReorder(card, idx) {
+    card.addEventListener('touchstart', () => {}, { passive: true }); // allow fast tap
+
+    // Tap the order number badge to select, tap another to swap
+    const num = card.querySelector('.order-num');
+    num.style.cursor = 'pointer';
+    num.addEventListener('click', () => {
+      if (touchSelectIdx === null) {
+        // Select this card
+        touchSelectIdx = idx;
+        document.querySelectorAll('.file-card').forEach((c, i) => {
+          c.style.outline = i === idx ? '2px solid var(--accent)' : '';
+        });
+      } else if (touchSelectIdx === idx) {
+        // Deselect
+        touchSelectIdx = null;
+        document.querySelectorAll('.file-card').forEach(c => c.style.outline = '');
+      } else {
+        // Swap
+        const a = touchSelectIdx, b = idx;
+        [files[a], files[b]] = [files[b], files[a]];
+        touchSelectIdx = null;
+        renderList();
+      }
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  Update UI State
+  // ─────────────────────────────────────────────────────────────────────
+  function updateUI() {
+    const count = files.length;
+
+    // counter
+    counterRow.style.display = count > 0 ? 'flex' : 'none';
+    [pip1, pip2, pip3].forEach((p, i) => {
+      p.classList.toggle('filled', i < count && count < MAX_FILES);
+      p.classList.toggle('full',   i < count && count >= MAX_FILES);
+    });
+
+    // drop zone disabled state
+    dropZone.classList.toggle('disabled', count >= MAX_FILES);
+
+    // actions
+    actionArea.style.display = count > 0 ? 'flex' : 'none';
+    mergeBtn.disabled = count < 1;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  Clear All
+  // ─────────────────────────────────────────────────────────────────────
+  function clearAll() {
+    files.forEach(f => { if (f.objectUrl) URL.revokeObjectURL(f.objectUrl); });
+    files = [];
+    fileInput.value = '';
+    fileList.innerHTML = '';
+    actionArea.style.display = 'none';
+    statusBox.classList.remove('visible');
+    updateUI();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  Progress helpers
+  // ─────────────────────────────────────────────────────────────────────
+  function setProgress(pct, msg, cls) {
+    statusBox.classList.add('visible');
+    progressBar.style.width = pct + '%';
+    statusText.textContent = msg;
+    statusText.className = 'status-text' + (cls ? ' ' + cls : '');
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  MERGE LOGIC  ← core feature
+  // ─────────────────────────────────────────────────────────────────────
+  async function mergePDF() {
+    if (files.length === 0) return;
+
+    mergeBtn.disabled = true;
+    clearBtn.disabled = true;
+    setProgress(0, '結合を開始しています...');
+
+    try {
+      const { PDFDocument } = PDFLib;
+      const merged = await PDFDocument.create();
+
+      for (let i = 0; i < files.length; i++) {
+        const item = files[i];
+        const pct = Math.round((i / files.length) * 85);
+        setProgress(pct, `[${i + 1}/${files.length}] "${item.name}" を処理中...`);
+
+        // Yield to keep UI responsive
+        await new Promise(r => setTimeout(r, 0));
+
+        const ab = await item.file.arrayBuffer();
+
+        if (item.type === 'pdf') {
+          // ── Load and copy all pages from the source PDF ──
+          const srcPdf = await PDFDocument.load(ab, { ignoreEncryption: true });
+          const indices = srcPdf.getPageIndices();
+          const copiedPages = await merged.copyPages(srcPdf, indices);
+          copiedPages.forEach(p => merged.addPage(p));
+
+        } else if (item.type === 'jpg') {
+          // ── Embed JPEG at full original resolution ──
+          const img = await merged.embedJpg(ab);
+          // Page size = image pixel dimensions (1pt per px at 72dpi)
+          // This preserves text sharpness for magazine screenshots
+          const page = merged.addPage([img.width, img.height]);
+          page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+
+        } else if (item.type === 'png') {
+          // ── Embed PNG at full original resolution ──
+          const img = await merged.embedPng(ab);
+          const page = merged.addPage([img.width, img.height]);
+          page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+        }
+      }
+
+      setProgress(90, '最終的なPDFを生成中...');
+      await new Promise(r => setTimeout(r, 0));
+
+      // Save with maximum quality settings
+      const pdfBytes = await merged.save({
+        useObjectStreams: false,  // higher compatibility
+        addDefaultPage: false,
+      });
+
+      setProgress(98, 'ダウンロードを準備中...');
+      await new Promise(r => setTimeout(r, 0));
+
+      // Download
+      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url;
+      a.download = 'merged_highres_' + Date.now() + '.pdf';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+      setProgress(100, `✅ 完了！ ${files.length} ファイルを結合しました（${formatBytes(pdfBytes.byteLength)}）`, 'success');
+
+    } catch (err) {
+      console.error(err);
+      setProgress(0, `❌ エラー: ${err.message}`, 'error');
+    } finally {
+      mergeBtn.disabled = files.length < 1;
+      clearBtn.disabled = false;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  Event Wiring
+  // ─────────────────────────────────────────────────────────────────────
+
+  // Drop Zone — click/keyboard open
+  dropZone.addEventListener('click', () => {
+    if (!dropZone.classList.contains('disabled')) fileInput.click();
+  });
+  dropZone.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dropZone.click(); }
+  });
+
+  // Drag visual
+  dropZone.addEventListener('dragenter', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragover',  e => { e.preventDefault(); });
+  dropZone.addEventListener('dragleave', e => { if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove('drag-over'); });
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    if (dropZone.classList.contains('disabled')) {
+      showToast('⚠️ 高画質を維持するため、一度に結合できるのは 3 枚までです。');
+      return;
+    }
+    addFiles(e.dataTransfer.files);
+  });
+
+  // File input change
+  fileInput.addEventListener('change', () => {
+    addFiles(fileInput.files);
+    fileInput.value = '';
+  });
+
+  // Buttons
+  mergeBtn.addEventListener('click', mergePDF);
+  clearBtn.addEventListener('click', clearAll);
+
+  // Prevent browser default file open on window drag
+  window.addEventListener('dragover',  e => e.preventDefault());
+  window.addEventListener('drop',      e => e.preventDefault());
+
+  // Initial state
+  updateUI();
+  </script>
+</body>
+</html>
+```
